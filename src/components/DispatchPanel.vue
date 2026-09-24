@@ -1,6 +1,6 @@
 <template>
   <div class="dispatch">
-    <!-- 页签：单点派发 / 统筹方案 / 转移安置 / 道路阻断 -->
+    <!-- 页签：单点派发 / 统筹方案 / 转移安置 / 道路阻断 / 道路抢修 / 实时预警 -->
     <div class="tabs">
       <button :class="{ active: tab === 'single' }" @click="tab = 'single'">🎯 单点派发</button>
       <button :class="{ active: tab === 'plan' }" @click="tab = 'plan'">
@@ -14,6 +14,9 @@
       </button>
       <button :class="{ active: tab === 'repair' }" @click="tab = 'repair'">
         🔧 道路抢修<span v-if="repair.activeOrders.length" class="badge orange">{{ repair.activeOrders.length }}</span>
+      </button>
+      <button :class="{ active: tab === 'warning' }" @click="tab = 'warning'">
+        🚨 实时预警<span v-if="warning.activeAlerts.length" class="badge red">{{ warning.activeAlerts.length }}</span>
       </button>
     </div>
 
@@ -186,6 +189,9 @@
 
     <!-- 道路抢修工单 -->
     <RepairPanel v-else-if="tab === 'repair'" />
+
+    <!-- 实时预警协同 -->
+    <WarningPanel v-else-if="tab === 'warning'" />
   </div>
 </template>
 
@@ -195,16 +201,19 @@ import { useCommandStore, dispatchParts } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { RESOURCE_TYPES } from '@/mock/data'
 import PlanPanel from '@/components/PlanPanel.vue'
 import TransferPanel from '@/components/TransferPanel.vue'
 import RoadBlockPanel from '@/components/RoadBlockPanel.vue'
 import RepairPanel from '@/components/RepairPanel.vue'
+import WarningPanel from '@/components/WarningPanel.vue'
 
 const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const tab = ref('single')
 const form = ref({ baseId: '', type: 'personnel', qty: 0 })
 
@@ -313,6 +322,10 @@ watch(() => repair.assigningBlockId, (id) => {
 })
 watch(() => repair.focusOrderId, (id) => {
   if (id) tab.value = 'repair'
+})
+// 新预警发布 → 自动跳到实时预警页签
+watch(() => warning.focusAlertId, (id) => {
+  if (id) tab.value = 'warning'
 })
 watch(selectedEvent, (ev) => {
   if (ev) {

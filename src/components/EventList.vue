@@ -34,6 +34,11 @@
         <div class="ev-row tags">
           <span class="tag">👥 {{ (ev.affected||0).toLocaleString() }}人</span>
           <span class="tag">{{ ev.reportedAt }} 上报</span>
+          <span
+            v-if="alertOf(ev.id)"
+            class="tag alert-tag"
+            :style="{ borderColor: warning.levelColorOf(alertOf(ev.id).level), color: warning.levelColorOf(alertOf(ev.id).level) }"
+          >📡 {{ warning.levelText(alertOf(ev.id).level).slice(0, 3) }}预警·{{ warning.statusText(alertOf(ev.id).status) }}</span>
         </div>
       </div>
       <div v-if="store.filteredEvents.length === 0" class="empty">无匹配事件</div>
@@ -43,9 +48,11 @@
 
 <script setup>
 import { useCommandStore } from '@/store/command'
+import { useWarningStore } from '@/store/warning'
 import { EVENT_TYPES, SEVERITY, EVENT_STATUS } from '@/mock/data'
 
 const store = useCommandStore()
+const warning = useWarningStore()
 const typeLabels = EVENT_TYPES
 const typeLabel = (t) => EVENT_TYPES[t]?.label || t
 const eventColor = (t) => EVENT_TYPES[t]?.color || '#777'
@@ -53,6 +60,8 @@ const severityColor = (s) => SEVERITY.find((x) => x.value === s)?.color || '#999
 const severityLabel = (s) => SEVERITY.find((x) => x.value === s)?.label || s
 const statusLabel = (s) => EVENT_STATUS.find((x) => x.value === s)?.label || s
 const statusColor = (s) => EVENT_STATUS.find((x) => x.value === s)?.color || '#999'
+// 事件当前生效的最高等级预警（无则 null）
+const alertOf = (id) => warning.topAlertOfEvent(id)
 </script>
 
 <style scoped>
@@ -92,5 +101,6 @@ const statusColor = (s) => EVENT_STATUS.find((x) => x.value === s)?.color || '#9
   font-size: 10px; background: #0c1730; border: 1px solid rgba(120,160,220,0.15);
   color: #8ba2c8; padding: 2px 7px; border-radius: 4px;
 }
+.tag.alert-tag { background: rgba(255,82,82,0.08); font-weight: 700; }
 .empty { text-align: center; color: #5b6f94; padding: 30px 0; font-size: 13px; }
 </style>

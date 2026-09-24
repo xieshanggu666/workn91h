@@ -21,6 +21,8 @@
       <div class="legend-item"><i class="dot" style="background:#26a69a"></i>安置点/转移路线</div>
       <div class="legend-item"><i class="dot" style="background:#c62828"></i>道路阻断区</div>
       <div class="legend-item"><i class="dot" style="background:#ff9800"></i>道路抢修中</div>
+      <div class="legend-item"><i class="dot" style="background:#4fc3f7"></i>气象监测站</div>
+      <div class="legend-item"><i class="dot" style="background:#a1887f"></i>地质监测站</div>
     </div>
 
     <!-- 圈画提示 -->
@@ -50,6 +52,7 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { loadAMap } from '@/config/amap'
 import { EVENT_TYPES, SEVERITY, RESOURCE_TYPES } from '@/mock/data'
 
@@ -57,6 +60,7 @@ const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const mapRef = ref(null)
 const loading = ref(true)
 const loadError = ref('')
@@ -66,7 +70,7 @@ let amap = null
 let heatmap = null
 let overlays = {
   poly: [], markers: [], lines: [], baseMarkers: [], shelterMarkers: [], transferLines: [],
-  blocks: [], blockMarkers: [], draft: []
+  blocks: [], blockMarkers: [], draft: [], feedMarkers: []
 }
 
 const selectedEvent = computed(() =>
@@ -313,6 +317,39 @@ function renderBlocks() {
   })
 }
 
+// 监测站 Marker（气象/地质；超阈时按预警等级着色并脉冲）
+function feedMarkerContent(f) {
+  const meta = warning.metricOf(f.metric)
+  const lv = warning.feedLevel(f)
+  const color = lv ? warning.levelColorOf(lv) : (meta.kind === 'geo' ? '#a1887f' : '#4fc3f7')
+  return `
+    <div class="feed-marker ${lv ? 'alarm' : ''}" style="--fc:${color}"
+         title="${f.station}｜${meta.label} ${f.value}${meta.unit}${lv ? `（${warning.levelText(lv)}预警）` : ''}">
+      <span>${meta.icon}</span>
+    </div>`
+}
+
+function renderFeeds() {
+  overlays.feedMarkers.forEach((m) => map?.remove(m))
+  overlays.feedMarkers = []
+  if (!amap || !map) return
+  warning.feeds.forEach((f) => {
+    const marker = new amap.Marker({
+      position: [f.lng, f.lat],
+      content: feedMarkerContent(f),
+      anchor: 'center',
+      cursor: 'pointer'
+    })
+    marker.on('click', () => {
+      const active = warning.activeAlertOfFeed(f.id)
+      if (active) warning.focusAlert(active.id)
+      store.selectEvent(f.eventId)
+    })
+    map.add(marker)
+    overlays.feedMarkers.push(marker)
+  })
+}
+
 // 圈画中的草稿（顶点 + 闭合虚线预览）
 function renderDraft() {
   overlays.draft.forEach((o) => map?.remove(o))
@@ -384,6 +421,7 @@ onMounted(async () => {
     renderShelters()
     renderTransfers()
     renderBlocks()
+    renderFeeds()
     loading.value = false
     map.setFitView(null, false, [100, 80, 120, 80], 1)
   } catch (e) {
@@ -405,6 +443,7 @@ onBeforeUnmount(() => {
   overlays.blocks.forEach((p) => map?.remove(p))
   overlays.blockMarkers.forEach((m) => map?.remove(m))
   overlays.draft.forEach((o) => map?.remove(o))
+  overlays.feedMarkers.forEach((m) => map?.remove(m))
   map?.destroy()
 })
 
@@ -449,6 +488,11 @@ watch(
 watch(
   () => repair.orders.map((o) => o.id + o.status + o.progress).join(','),
   () => renderBlocks()
+)
+// 监测站读数/预警等级变化 → 重绘监测站标记（含回放快照还原）
+watch(
+  () => warning.feeds.map((f) => f.id + f.value).join(',') + '|' + warning.alerts.map((a) => a.id + a.status + a.level).join(','),
+  () => renderFeeds()
 )
 watch(() => roadblock.draft.length, () => renderDraft())
 watch(() => roadblock.drawing, (on) => bindDrawing(on))
@@ -637,5 +681,18 @@ watch(() => roadblock.selectedBlockId, (id) => {
   width: 10px; height: 10px; border-radius: 50%;
   background: #ef5350; border: 2px solid #fff;
   box-shadow: 0 1px 5px rgba(0,0,0,0.5);
+}
+/* 监测站标记（气象/地质；超阈时按预警等级着色脉冲） */
+.feed-marker {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #0d1730; border: 2px solid var(--fc);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 7px rgba(0,0,0,0.45);
+}
+.feed-marker span { font-size: 11px; }
+.feed-marker.alarm { animation: feedPulse 1.5s ease-out infinite; }
+@keyframes feedPulse {
+  0% { box-shadow: 0 0 0 0 var(--fc); }
+  100% { box-shadow: 0 0 0 11px rgba(0,0,0,0); }
 }
 </style>

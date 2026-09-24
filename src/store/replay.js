@@ -3,15 +3,16 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import {
-  RESOURCE_TYPES, EVENT_TYPES, EVENT_STATUS, TRANSFER_STATUS, REPAIR_STATUS
+  RESOURCE_TYPES, EVENT_TYPES, EVENT_STATUS, TRANSFER_STATUS, REPAIR_STATUS, SEVERITY, ALERT_STATUS
 } from '@/mock/data'
 
 /* =========================================================================
  * 历史复盘模块（事件溯源 · 多分支演练）
  *
- * 录制：包装四个业务 store 的 action，每个成功改变状态的「最外层动作」沉淀一帧——
- *       全量状态快照（事件/派发/转移/阻断/抢修/库存）+ 动作元数据 + 当帧新增处置日志。
+ * 录制：包装五个业务 store 的 action，每个成功改变状态的「最外层动作」沉淀一帧——
+ *       全量状态快照（事件/派发/转移/阻断/抢修/预警/库存）+ 动作元数据 + 当帧新增处置日志。
  * 回放：seek 到任意帧即用快照整体替换当前态势（地图/面板全部响应式联动），
  *       回放期间业务动作一律拦截，演练处于只读锁定状态。
  * 分支：帧按「演练分支」组织为分支树——
@@ -28,6 +29,8 @@ const STATUS_LABEL = (list) => (v) => list.find((s) => s.value === v)?.label || 
 const eventStatusLabel = STATUS_LABEL(EVENT_STATUS)
 const batchStatusLabel = STATUS_LABEL(TRANSFER_STATUS)
 const repairStatusLabel = STATUS_LABEL(REPAIR_STATUS)
+const alertStatusLabel = STATUS_LABEL(ALERT_STATUS)
+const severityLabel = STATUS_LABEL(SEVERITY)
 
 // 不进入复盘时间轴的动作：内部「_」方法、纯 UI 状态、绘图草稿、时钟、自动模拟、场景载入、
 // 以及只会被其它业务动作内部调用的联动方法（由外层动作统一记一帧）
@@ -37,6 +40,7 @@ const JOURNAL_SKIP = new Set([
   'startDrawing', 'addDraftPoint', 'undoDraftPoint', 'cancelDrawing', 'finishDrawing', 'cancelReport', 'quickPolygon',
   'startAssign', 'cancelAssign', 'focusOrder',
   'setClock', 'startAutoPlay', 'stopAutoPlay',
+  'startMonitor', 'stopMonitor', 'focusAlert',
   'assessActive', 'resetDispatchRoute', 'resetBatchRoute'
 ])
 
@@ -47,6 +51,7 @@ const CATEGORY_META = {
   transfer: { label: '群众转移', color: '#ab47bc', icon: '🚌' },
   block:    { label: '道路阻断', color: '#ef5350', icon: '🚧' },
   repair:   { label: '道路抢修', color: '#ffc107', icon: '🔧' },
+  warning:  { label: '实时预警', color: '#ff5252', icon: '📡' },
   system:   { label: '系统', color: '#78909c', icon: '🎬' }
 }
 
@@ -76,6 +81,12 @@ const ACTION_CATEGORY = {
     createOrder: 'repair', acceptOrder: 'repair', reportProgress: 'repair',
     finishOrder: 'repair', delayOrder: 'repair', failOrder: 'repair',
     cancelOrder: 'repair', acceptWork: 'repair'
+  },
+  wn: {
+    ingestReading: 'warning', issueAlert: 'warning',
+    confirmAlert: 'warning', confirmAll: 'warning',
+    escalateAlert: 'warning', revokeAlert: 'warning', closeAlert: 'warning',
+    applySuggestion: 'warning'
   }
 }
 
@@ -103,6 +114,7 @@ function takeSnapshot() {
   const tr = useTransferStore()
   const rb = useRoadblockStore()
   const ro = useRepairStore()
+  const wn = useWarningStore()
   // 整体深克隆：帧快照必须与实时状态脱钩，否则后续原地修改会穿透历史帧
   return clone({
     cmd: {
@@ -131,6 +143,10 @@ function takeSnapshot() {
       assigningBlockId: null,
       focusOrderId: ro.focusOrderId,
       clock: ro.clock
+    },
+    wn: {
+      feeds: wn.feeds,
+      alerts: wn.alerts
     }
   })
 }
@@ -144,6 +160,7 @@ function batchInSnap(snap, id) { return snap.tr.batches.find((b) => b.id === id)
 function shelterInSnap(snap, id) { return snap.tr.shelters.find((s) => s.id === id) }
 function blockInSnap(snap, id) { return snap.rb.blocks.find((b) => b.id === id) }
 function orderInSnap(snap, id) { return snap.ro.orders.find((o) => o.id === id) }
+function alertInSnap(snap, id) { return (snap.wn?.alerts || []).find((a) => a.id === id) }
 
 function dispatchName(d) {
   if (!d) return '派发'
@@ -165,6 +182,7 @@ function describeFrame(module, action, args, snap) {
     else if (module === 'tr') title = describeTr(action, args, snap)
     else if (module === 'rb') title = describeRb(action, args, snap)
     else if (module === 'ro') title = describeRo(action, args, snap)
+    else if (module === 'wn') title = describeWn(action, args, snap)
   } catch { /* 标题生成失败不影响录制 */ }
   if (!title) title = action
   return { category, title }
@@ -312,7 +330,37 @@ function describeRo(action, args, snap) {
   }
 }
 
-/* ---------- 当帧新增处置日志（事件时间线 / 阻断日志 / 工单日志） ---------- */
+function describeWn(action, args, snap) {
+  const alertName = (a) => (a ? `${severityLabel(a.level)}预警（${a.eventTitle}）` : '预警单')
+  switch (action) {
+    case 'ingestReading': {
+      const feed = (snap.wn?.feeds || []).find((f) => f.id === args[0])
+      return `监测数据注入：${feed?.station || args[0]} 读数 ${args[1]}`
+    }
+    case 'issueAlert': {
+      const a = args[0] || {}
+      const ev = evInSnap(snap, a.eventId)
+      return `人工发布${severityLabel(a.level)}预警：${ev?.title || ''}`
+    }
+    case 'confirmAlert': {
+      const a = alertInSnap(snap, args[0])
+      return `预警角色签收（${args[1]?.role || ''}）：${alertName(a)}`
+    }
+    case 'confirmAll':
+      return `预警一键全员确认：${alertName(alertInSnap(snap, args[0]))}`
+    case 'escalateAlert':
+      return `预警升级：${alertName(alertInSnap(snap, args[0]))}`
+    case 'revokeAlert':
+      return `预警撤销（留痕）：${alertName(alertInSnap(snap, args[0]))}`
+    case 'closeAlert':
+      return `预警解除：${alertName(alertInSnap(snap, args[0]))}`
+    case 'applySuggestion':
+      return `预警联动调度出库：${alertName(alertInSnap(snap, args[0]))}`
+    default: return ''
+  }
+}
+
+/* ---------- 当帧新增处置日志（事件时间线 / 阻断日志 / 工单日志 / 预警日志） ---------- */
 
 function collectLogs(next, prev) {
   const logs = []
@@ -330,6 +378,11 @@ function collectLogs(next, prev) {
     const old = prev ? orderInSnap(prev, o.id) : null
     const from = old ? old.logs.length : 0
     o.logs.slice(from).forEach((t) => logs.push({ source: 'repair', tag: o.blockName, at: t.at, text: t.text }))
+  })
+  ;(next.wn?.alerts || []).forEach((a) => {
+    const old = prev ? alertInSnap(prev, a.id) : null
+    const from = old ? old.log.length : 0
+    a.log.slice(from).forEach((t) => logs.push({ source: 'warning', tag: `${severityLabel(a.level)}预警·${a.eventTitle}`, at: t.at, text: t.text }))
   })
   return logs
 }
@@ -461,6 +514,30 @@ function diffSnapshots(prev, next) {
     }
   })
 
+  /* 实时预警（旧快照无 wn 字段时按空处理） */
+  ;(next.wn?.alerts || []).forEach((a) => {
+    const old = prev ? alertInSnap(prev, a.id) : null
+    const name = `${severityLabel(a.level)}预警（${a.eventTitle}）`
+    if (!old) {
+      statusChanges.push({ icon: '📡', color: CATEGORY_META.warning.color, text: `新增预警：${name}，通知 ${a.notices.length} 个角色` })
+    } else {
+      if (old.level !== a.level) {
+        statusChanges.push({ icon: '⬆️', color: CATEGORY_META.warning.color, text: `预警升级：${severityLabel(old.level)} → ${severityLabel(a.level)}（${a.eventTitle}）` })
+      }
+      if (old.status !== a.status) {
+        statusChanges.push({ icon: '🔁', color: CATEGORY_META.warning.color, text: `${name} 状态：${alertStatusLabel(old.status)} → ${alertStatusLabel(a.status)}` })
+      }
+      const oAck = (old.notices || []).filter((n) => n.ackAt).length
+      const nAck = (a.notices || []).filter((n) => n.ackAt).length
+      if (oAck !== nAck) {
+        statusChanges.push({ icon: '✅', color: CATEGORY_META.warning.color, text: `${name} 角色签收：${oAck} → ${nAck}/${a.notices.length}` })
+      }
+      if (!old.suggestionApplied && a.suggestionApplied) {
+        statusChanges.push({ icon: '📦', color: CATEGORY_META.warning.color, text: `${name} 调度建议已联动出库` })
+      }
+    }
+  })
+
   /* 资源占用：各基地各类型库存增减 */
   next.cmd.bases.forEach((b) => {
     const old = prev ? baseInSnap(prev, b.id) : null
@@ -498,6 +575,7 @@ function diffSnapshots(prev, next) {
   counters.batches = next.tr.batches.length
   counters.blocks = next.rb.blocks.filter((b) => b.status === 'active').length
   counters.orders = next.ro.orders.length
+  counters.alerts = (next.wn?.alerts || []).filter((a) => a.status === 'issued' || a.status === 'confirmed').length
   counters.settleDay = next.tr.settleDay
 
   return { statusChanges, routes, stocks, occupancy, counters }
@@ -579,7 +657,15 @@ function summarizeSnapshot(snap) {
     }
   })
 
-  return { events, stock, beds, dispatches, batches, blocks, orders, settleDay: snap.tr.settleDay }
+  const alerts = {}
+  ;(snap.wn?.alerts || []).forEach((a) => {
+    alerts[a.id] = {
+      id: a.id, name: `${severityLabel(a.level)}预警（${a.eventTitle}）`,
+      status: a.status, statusText: alertStatusLabel(a.status), level: a.level
+    }
+  })
+
+  return { events, stock, beds, dispatches, batches, blocks, orders, alerts, settleDay: snap.tr.settleDay }
 }
 
 // 对照两个快照：按 id 对齐事件/派发/批次/阻断/工单，按基地×物资对齐库存，按安置点对齐床位
@@ -662,10 +748,19 @@ function compareSnapshots(baseSnap, targetSnap) {
     add('抢修工单', meta.name, x, y, same, fmt)
   })
 
+  // 实时预警
+  Object.keys({ ...a.alerts, ...b.alerts }).forEach((id) => {
+    const x = a.alerts[id], y = b.alerts[id]
+    const meta = y || x
+    const fmt = (o) => o ? `${severityLabel(o.level)}｜${o.statusText}` : '—（无此预警）'
+    const same = !!x && !!y && x.status === y.status && x.level === y.level
+    add('实时预警', meta.name, x, y, same, fmt)
+  })
+
   // 结算日
   add('补给结算', '当前结算日', '第' + a.settleDay + '日', '第' + b.settleDay + '日', a.settleDay === b.settleDay)
 
-  const dims = ['事件状态', '基地库存', '安置床位', '物资派发', '转移批次', '道路阻断', '抢修工单', '补给结算']
+  const dims = ['事件状态', '基地库存', '安置床位', '物资派发', '转移批次', '道路阻断', '抢修工单', '实时预警', '补给结算']
   return {
     rows,
     groups: dims.map((dim) => ({ dim, rows: rows.filter((r) => r.dim === dim) })).filter((g) => g.rows.length),
@@ -710,7 +805,7 @@ function wrapStore(store, module) {
   })
 }
 
-// 在四个业务 store 创建后安装一次（幂等）；main.js 与测试入口调用
+// 在五个业务 store 创建后安装一次（幂等）；main.js 与测试入口调用
 export function installReplayRecorder() {
   const pinia = getActivePinia()
   if (!pinia || pinia.__replayRecorderInstalled) return
@@ -719,6 +814,7 @@ export function installReplayRecorder() {
   wrapStore(useTransferStore(), 'tr')
   wrapStore(useRoadblockStore(), 'rb')
   wrapStore(useRepairStore(), 'ro')
+  wrapStore(useWarningStore(), 'wn')
 }
 
 let playTimer = null
@@ -1062,11 +1158,13 @@ export const useReplayStore = defineStore('replay', {
       const tr = useTransferStore()
       const rb = useRoadblockStore()
       const ro = useRepairStore()
+      const wn = useWarningStore()
       if (cmd.autoPlay) {
         cmd.autoPlay = false
         clearInterval(cmd.replayTimer)
         cmd.replayTimer = null
       }
+      if (wn.monitorOn) wn.stopMonitor()
       // 直接赋值替换（reactive 数组/对象替换同样触发响应式更新；
       // 不走 $patch 是为了规避本模块对业务 store action 的包装链）
       cmd.events = clone(snap.cmd.events)
@@ -1093,6 +1191,11 @@ export const useReplayStore = defineStore('replay', {
       ro.assigningBlockId = null
       ro.focusOrderId = snap.ro.focusOrderId
       ro.clock = snap.ro.clock
+
+      // 旧快照无预警字段时按空态势还原
+      wn.feeds = clone(snap.wn?.feeds || [])
+      wn.alerts = clone(snap.wn?.alerts || [])
+      wn.focusAlertId = null
     },
 
     /* ---------- 旧版单线历史兼容 ---------- */

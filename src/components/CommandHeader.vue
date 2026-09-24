@@ -50,6 +50,18 @@
         <span class="num" style="color:#ff9800">{{ store.stats.shortagePending }}</span>
         <span class="lab">短缺待补</span>
       </div>
+      <div class="stat" :class="{ blocked: warning.stats.active }">
+        <span class="num" style="color:#ff5252">{{ warning.stats.active }}</span>
+        <span class="lab">预警中</span>
+      </div>
+      <div class="stat" :class="{ blocked: warning.stats.pending }">
+        <span class="num" style="color:#ffab40">{{ warning.stats.pending }}</span>
+        <span class="lab">待确认</span>
+      </div>
+      <div class="stat" :class="{ blocked: warning.stats.abnormal }">
+        <span class="num" style="color:#4fc3f7">{{ warning.stats.abnormal }}/{{ warning.stats.stations }}</span>
+        <span class="lab">监测异常</span>
+      </div>
       <div class="stat" :class="{ blocked: roadblock.activeBlocks.length }">
         <span class="num" style="color:#ef5350">{{ roadblock.activeBlocks.length }}</span>
         <span class="lab">道路阻断</span>
@@ -107,6 +119,7 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { useReplayStore } from '@/store/replay'
 import { SCENARIOS } from '@/mock/data'
 
@@ -114,6 +127,7 @@ const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const replay = useReplayStore()
 const scenarios = SCENARIOS
 const now = ref('')

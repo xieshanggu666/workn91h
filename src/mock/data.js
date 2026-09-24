@@ -62,6 +62,45 @@ export const REGISTER_STAGES = [
   { value: 'checkout', label: '转出登记', icon: '🚪', hint: '返乡/投亲/转院，释放床位' }
 ]
 
+/* ---------- 实时预警协同 ---------- */
+
+// 预警接收角色（多角色告警扇出；等级越高通知面越广）
+export const ALERT_ROLES = {
+  commander: { label: '指挥长', icon: '🎖️', channel: '指挥大屏+短信' },
+  duty: { label: '值班长', icon: '📟', channel: '值班台' },
+  dispatch: { label: '调度员', icon: '🗂️', channel: '调度台' },
+  field: { label: '现场队伍', icon: '👷', channel: '对讲+移动APP' },
+  expert: { label: '专家组', icon: '🎓', channel: '专家会商系统' },
+  shelter: { label: '安置点联络员', icon: '🏕️', channel: '安置点广播' }
+}
+
+// 预警等级 → 扇出角色（蓝Ⅳ / 黄Ⅲ / 橙Ⅱ / 红Ⅰ，与灾情等级共用色阶）
+export const ALERT_LEVEL_ROLES = {
+  blue: ['duty', 'dispatch'],
+  yellow: ['duty', 'dispatch', 'field'],
+  orange: ['commander', 'duty', 'dispatch', 'field', 'expert'],
+  red: ['commander', 'duty', 'dispatch', 'field', 'expert', 'shelter']
+}
+
+// 预警单状态机：待确认 → 已确认（响应中）→ 已解除 / 已撤销（终态）
+// 升级后重新进入「待确认」（新增角色需签收确认）
+export const ALERT_STATUS = [
+  { value: 'issued', label: '待确认', color: '#ffab40' },
+  { value: 'confirmed', label: '已确认', color: '#ff5252' },
+  { value: 'closed', label: '已解除', color: '#4caf50' },
+  { value: 'revoked', label: '已撤销', color: '#9e9e9e' }
+]
+
+// 监测指标目录（气象 / 地质两类接入）
+export const FEED_METRICS = {
+  rainfall: { label: '降雨量', unit: 'mm/h', icon: '🌧️', kind: 'weather' },
+  waterlevel: { label: '河道水位', unit: 'm', icon: '🌊', kind: 'weather' },
+  wind: { label: '风速', unit: 'm/s', icon: '💨', kind: 'weather' },
+  displacement: { label: '边坡位移', unit: 'mm', icon: '📐', kind: 'geo' },
+  moisture: { label: '土壤含水率', unit: '%', icon: '💧', kind: 'geo' },
+  microseism: { label: '微震频次', unit: '次/h', icon: '📳', kind: 'geo' }
+}
+
 // 安置点（床位容量）
 export const SHELTERS = [
   { id: 'sh-1', name: '江油一中临时安置点', lng: 104.7705, lat: 31.778, capacity: 1200 },
@@ -156,6 +195,14 @@ export const SCENARIOS = [
         evacuate: 150,
         demand: { personnel: 50, water: 500, food: 800, medical: 150, vehicle: 10, tent: 300 }
       }
+    ],
+    // 实时监测站（气象/地质数据接入；thresholds 为 黄/橙/红 预警阈值，drift 为模拟波动幅度）
+    feeds: [
+      { id: 'fd-001', metric: 'rainfall', station: '江油水文站', eventId: 'ev-001', lng: 104.731, lat: 31.792, value: 18, drift: 3.2, thresholds: { yellow: 30, orange: 50, red: 80 } },
+      { id: 'fd-002', metric: 'waterlevel', station: '涪江江油水位站', eventId: 'ev-001', lng: 104.762, lat: 31.748, value: 3.2, drift: 0.16, thresholds: { yellow: 4.0, orange: 4.8, red: 5.5 } },
+      { id: 'fd-003', metric: 'wind', station: '高新区气象站', eventId: 'ev-002', lng: 104.052, lat: 30.581, value: 8, drift: 1.1, thresholds: { yellow: 14, orange: 20, red: 28 } },
+      { id: 'fd-004', metric: 'microseism', station: '北川地震监测台', eventId: 'ev-003', lng: 104.452, lat: 31.621, value: 2, drift: 1.2, thresholds: { yellow: 6, orange: 12, red: 20 } },
+      { id: 'fd-005', metric: 'displacement', station: '北川边坡监测点', eventId: 'ev-003', lng: 104.492, lat: 31.598, value: 5, drift: 1.8, thresholds: { yellow: 15, orange: 30, red: 50 } }
     ]
   },
   {
@@ -217,6 +264,13 @@ export const SCENARIOS = [
         evacuate: 600,
         demand: { personnel: 40, water: 300, food: 500, medical: 100, vehicle: 12, tent: 0 }
       }
+    ],
+    feeds: [
+      { id: 'fd-101', metric: 'rainfall', station: '平武雨量站', eventId: 'ev-101', lng: 104.521, lat: 32.422, value: 22, drift: 2.8, thresholds: { yellow: 30, orange: 50, red: 80 } },
+      { id: 'fd-102', metric: 'waterlevel', station: '涪江平武水位站', eventId: 'ev-101', lng: 104.552, lat: 32.381, value: 4.1, drift: 0.18, thresholds: { yellow: 4.5, orange: 5.2, red: 6.0 } },
+      { id: 'fd-103', metric: 'displacement', station: '青川滑坡位移计', eventId: 'ev-102', lng: 105.242, lat: 32.572, value: 12, drift: 2.2, thresholds: { yellow: 15, orange: 30, red: 50 } },
+      { id: 'fd-104', metric: 'moisture', station: '青川土壤含水站', eventId: 'ev-102', lng: 105.221, lat: 32.591, value: 32, drift: 2.0, thresholds: { yellow: 45, orange: 60, red: 75 } },
+      { id: 'fd-105', metric: 'wind', station: '广元气象站', eventId: 'ev-103', lng: 105.821, lat: 32.421, value: 10, drift: 1.2, thresholds: { yellow: 14, orange: 20, red: 28 } }
     ]
   }
 ]
