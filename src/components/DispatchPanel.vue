@@ -15,6 +15,11 @@
       <button :class="{ active: tab === 'repair' }" @click="tab = 'repair'">
         🔧 道路抢修<span v-if="repair.activeOrders.length" class="badge orange">{{ repair.activeOrders.length }}</span>
       </button>
+      <button :class="{ active: tab === 'warning' }" @click="tab = 'warning'">
+        📡 实时预警<span v-if="warning.stats.pending || warning.stats.unreadMine" class="badge cyan">
+          {{ warning.stats.pending }}<i v-if="warning.stats.unreadMine" class="tab-dot"></i>
+        </span>
+      </button>
     </div>
 
     <template v-if="tab === 'single'">
@@ -186,6 +191,9 @@
 
     <!-- 道路抢修工单 -->
     <RepairPanel v-else-if="tab === 'repair'" />
+
+    <!-- 实时预警协同 -->
+    <WarningPanel v-else-if="tab === 'warning'" />
   </div>
 </template>
 
@@ -195,16 +203,19 @@ import { useCommandStore, dispatchParts } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { RESOURCE_TYPES } from '@/mock/data'
 import PlanPanel from '@/components/PlanPanel.vue'
 import TransferPanel from '@/components/TransferPanel.vue'
 import RoadBlockPanel from '@/components/RoadBlockPanel.vue'
 import RepairPanel from '@/components/RepairPanel.vue'
+import WarningPanel from '@/components/WarningPanel.vue'
 
 const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const tab = ref('single')
 const form = ref({ baseId: '', type: 'personnel', qty: 0 })
 
@@ -353,6 +364,12 @@ watch(selectedEvent, (ev) => {
 .badge.teal { background: #26a69a; }
 .badge.red { background: #ef5350; }
 .badge.orange { background: #ff9800; }
+.badge.cyan { background: #26c6da; position: relative; }
+.tab-dot {
+  position: absolute; top: -3px; right: -3px;
+  width: 7px; height: 7px; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 6px rgba(38,198,218,0.9);
+}
 .panel-sub {
   font-size: 12px; color: #6f8cb8; font-weight: 600;
   border-left: 3px solid #4d8dff; padding-left: 8px; margin: 6px 0;

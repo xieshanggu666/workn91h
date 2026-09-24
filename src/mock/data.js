@@ -55,6 +55,81 @@ export const REPAIR_STATUS = [
 // 抢修可领用的物资目录（队伍人员与车辆单列分配）
 export const REPAIR_MATERIAL_TYPES = ['medical', 'food', 'water', 'tent']
 
+/* ============================ 实时预警协同 ============================ */
+
+// 预警种类（气象 / 地质两大类数据源）
+// kind 与灾情事件类型 EVENT_TYPES 的 key 对齐（rain/tempest 对应洪涝，无对应事件时仅预警不建事件）
+export const WARNING_KINDS = {
+  rain: { label: '暴雨预警', icon: '🌧️', group: 'weather', color: '#2f9cf5', eventType: 'flood' },
+  tempest: { label: '强对流大风', icon: '🌬️', group: 'weather', color: '#8e44ad', eventType: 'typhoon' },
+  typhoon: { label: '台风预警', icon: '🌀', group: 'weather', color: '#ab47bc', eventType: 'typhoon' },
+  flood: { label: '洪水预警', icon: '🌊', group: 'hydrology', color: '#0288d1', eventType: 'flood' },
+  waterlog: { label: '城市内涝风险', icon: '🚰', group: 'hydrology', color: '#26c6da', eventType: 'flood' },
+  landslide: { label: '滑坡/泥石流预警', icon: '⛰️', group: 'geo', color: '#9c6b2f', eventType: 'landslide' },
+  quake: { label: '地震速报', icon: '⚠️', color: '#f56c2f', group: 'geo', eventType: 'quake' }
+}
+
+// 预警数据源（气象 / 水文 / 地质监测网）
+export const WARNING_SOURCES = [
+  { id: 'cma', name: '省气象台', group: 'weather', icon: '🌦️' },
+  { id: 'hydro', name: '水文监测中心', group: 'hydrology', icon: '🌊' },
+  { id: 'geo', name: '地质灾害监测网', group: 'geo', icon: '⛰️' },
+  { id: 'seis', name: '地震台网中心', group: 'geo', icon: '📡' }
+]
+
+// 协同角色：按灾情等级触发不同角色告警，确认须各角色逐一签收
+export const WARNING_ROLES = [
+  { id: 'duty', name: '值班调度员', icon: '🎧' },
+  { id: 'commander', name: '现场指挥员', icon: '🫡' },
+  { id: 'expert', name: '气象地灾专家', icon: '🧑‍🔬' },
+  { id: 'chief', name: '应急指挥长', icon: '⭐' }
+]
+
+// 各灾情等级需确认的角色（等级越高，协同范围越大）
+export const ACK_ROLES_BY_SEV = {
+  blue: ['duty'],
+  yellow: ['duty', 'commander'],
+  orange: ['duty', 'commander', 'expert'],
+  red: ['duty', 'commander', 'expert', 'chief']
+}
+
+// 预警生命周期：待确认 → 已确认 →（升级后重新确认）→ 已解除
+export const WARNING_STATUS = [
+  { value: 'pending', label: '待确认', color: '#ff9800' },
+  { value: 'confirmed', label: '已确认', color: '#2f9cf5' },
+  { value: 'revoked', label: '已解除', color: '#4caf50' }
+]
+
+// 预警等级 → 建议预置资源模板（基数，按等级系数缩放）
+const WARNING_DEMAND_BASE = {
+  rain: { personnel: 60, water: 600, food: 900, medical: 120, vehicle: 12, tent: 200 },
+  tempest: { personnel: 40, water: 300, food: 500, medical: 80, vehicle: 10, tent: 100 },
+  typhoon: { personnel: 80, water: 800, food: 1200, medical: 150, vehicle: 16, tent: 300 },
+  flood: { personnel: 100, water: 1200, food: 1800, medical: 300, vehicle: 20, tent: 500 },
+  waterlog: { personnel: 30, water: 200, food: 300, medical: 60, vehicle: 12, tent: 60 },
+  landslide: { personnel: 50, water: 300, food: 500, medical: 100, vehicle: 10, tent: 150 },
+  quake: { personnel: 70, water: 500, food: 800, medical: 200, vehicle: 14, tent: 300 }
+}
+const SEV_DEMAND_FACTOR = { blue: 0.5, yellow: 1, orange: 1.6, red: 2.4 }
+// 各等级预警估算影响人数基数
+const SEV_AFFECTED = { blue: 300, yellow: 1500, orange: 5000, red: 12000 }
+
+export function warningDemand(kind, severity) {
+  const base = WARNING_DEMAND_BASE[kind] || WARNING_DEMAND_BASE.rain
+  const f = SEV_DEMAND_FACTOR[severity] || 1
+  const demand = {}
+  Object.entries(base).forEach(([t, v]) => {
+    const n = Math.round(v * f)
+    // 取整到便于演示的数量级
+    demand[t] = Math.max(10, Math.round(n / 10) * 10)
+  })
+  return demand
+}
+
+export function warningAffected(severity) {
+  return SEV_AFFECTED[severity] || SEV_AFFECTED.blue
+}
+
 // 登记环节
 export const REGISTER_STAGES = [
   { value: 'pickup', label: '接运登记', icon: '🚌', hint: '现场登车，核录人员信息' },

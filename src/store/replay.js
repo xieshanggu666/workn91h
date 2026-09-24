@@ -3,8 +3,10 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import {
-  RESOURCE_TYPES, EVENT_TYPES, EVENT_STATUS, TRANSFER_STATUS, REPAIR_STATUS
+  RESOURCE_TYPES, EVENT_TYPES, EVENT_STATUS, TRANSFER_STATUS, REPAIR_STATUS,
+  WARNING_KINDS, SEVERITY
 } from '@/mock/data'
 
 /* =========================================================================
@@ -28,6 +30,7 @@ const STATUS_LABEL = (list) => (v) => list.find((s) => s.value === v)?.label || 
 const eventStatusLabel = STATUS_LABEL(EVENT_STATUS)
 const batchStatusLabel = STATUS_LABEL(TRANSFER_STATUS)
 const repairStatusLabel = STATUS_LABEL(REPAIR_STATUS)
+const sevLabelOf = (v) => SEVERITY.find((s) => s.value === v)?.label || v
 
 // 不进入复盘时间轴的动作：内部「_」方法、纯 UI 状态、绘图草稿、时钟、自动模拟、场景载入、
 // 以及只会被其它业务动作内部调用的联动方法（由外层动作统一记一帧）
@@ -37,7 +40,9 @@ const JOURNAL_SKIP = new Set([
   'startDrawing', 'addDraftPoint', 'undoDraftPoint', 'cancelDrawing', 'finishDrawing', 'cancelReport', 'quickPolygon',
   'startAssign', 'cancelAssign', 'focusOrder',
   'setClock', 'startAutoPlay', 'stopAutoPlay',
-  'assessActive', 'resetDispatchRoute', 'resetBatchRoute'
+  'assessActive', 'resetDispatchRoute', 'resetBatchRoute',
+  // 预警模块：角色切换/查看/实时流开关等纯 UI 状态不入时间轴（推送产生的预警帧由 ingestSignal 记录）
+  'setRole', 'focusWarning', 'markRead', 'startFeed', 'stopFeed'
 ])
 
 const CATEGORY_META = {
@@ -47,6 +52,7 @@ const CATEGORY_META = {
   transfer: { label: '群众转移', color: '#ab47bc', icon: '🚌' },
   block:    { label: '道路阻断', color: '#ef5350', icon: '🚧' },
   repair:   { label: '道路抢修', color: '#ffc107', icon: '🔧' },
+  warning:  { label: '实时预警', color: '#26c6da', icon: '📡' },
   system:   { label: '系统', color: '#78909c', icon: '🎬' }
 }
 
@@ -76,6 +82,11 @@ const ACTION_CATEGORY = {
     createOrder: 'repair', acceptOrder: 'repair', reportProgress: 'repair',
     finishOrder: 'repair', delayOrder: 'repair', failOrder: 'repair',
     cancelOrder: 'repair', acceptWork: 'repair'
+  },
+  wn: {
+    ingestSignal: 'warning', manualSignal: 'warning', pushNextSignal: 'warning',
+    ackWarning: 'warning', escalateWarning: 'warning', revokeWarning: 'warning',
+    linkEvent: 'warning', createEventForWarning: 'warning', applySuggestion: 'warning'
   }
 }
 
@@ -103,6 +114,7 @@ function takeSnapshot() {
   const tr = useTransferStore()
   const rb = useRoadblockStore()
   const ro = useRepairStore()
+  const wn = useWarningStore()
   // 整体深克隆：帧快照必须与实时状态脱钩，否则后续原地修改会穿透历史帧
   return clone({
     cmd: {
@@ -131,6 +143,13 @@ function takeSnapshot() {
       assigningBlockId: null,
       focusOrderId: ro.focusOrderId,
       clock: ro.clock
+    },
+    wn: {
+      warnings: wn.warnings,
+      signals: wn.signals,
+      feedCursor: wn.feedCursor,
+      focusWarningId: wn.focusWarningId,
+      currentRole: wn.currentRole
     }
   })
 }
@@ -144,6 +163,7 @@ function batchInSnap(snap, id) { return snap.tr.batches.find((b) => b.id === id)
 function shelterInSnap(snap, id) { return snap.tr.shelters.find((s) => s.id === id) }
 function blockInSnap(snap, id) { return snap.rb.blocks.find((b) => b.id === id) }
 function orderInSnap(snap, id) { return snap.ro.orders.find((o) => o.id === id) }
+function warningInSnap(snap, id) { return snap.wn.warnings.find((w) => w.id === id) }
 
 function dispatchName(d) {
   if (!d) return '派发'
@@ -165,6 +185,7 @@ function describeFrame(module, action, args, snap) {
     else if (module === 'tr') title = describeTr(action, args, snap)
     else if (module === 'rb') title = describeRb(action, args, snap)
     else if (module === 'ro') title = describeRo(action, args, snap)
+    else if (module === 'wn') title = describeWn(action, args, snap)
   } catch { /* 标题生成失败不影响录制 */ }
   if (!title) title = action
   return { category, title }
@@ -311,6 +332,46 @@ function describeRo(action, args, snap) {
     default: return ''
   }
 }
+
+function wnInSnap(snap, id) { return snap.wn.warnings.find((w) => w.id === id) }
+function wnName(w) {
+  if (!w) return '预警'
+  const meta = WARNING_KINDS[w.kind]
+  return `${meta?.label || w.kind}（${w.location?.name || ''}）`
+}
+
+function describeWn(action, args, snap) {
+  switch (action) {
+    case 'ingestSignal':
+    case 'manualSignal':
+    case 'pushNextSignal': {
+      const sig = args[0] || {}
+      if (!sig.level) return `监测信号解除：${WARNING_KINDS[sig.kind]?.label || sig.kind}（${sig.location?.name || ''}）`
+      const sev = SEVERITY.find((s) => s.value === sig.level)?.label || sig.level
+      return `接入${WARNING_KINDS[sig.kind]?.label || sig.kind}信号（${sev}）：${sig.location?.name || ''}`
+    }
+    case 'ackWarning': {
+      const w = wnInSnap(snap, args[0])
+      const role = WARNING_ROLES_LABEL[args[1]] || '角色'
+      return `${role}确认预警：${wnName(w)}`
+    }
+    case 'escalateWarning': {
+      const w = wnInSnap(snap, args[0])
+      const sev = SEVERITY.find((s) => s.value === args[1])?.label || args[1]
+      return `人工升级预警至${sev}：${wnName(w)}`
+    }
+    case 'revokeWarning':
+      return `解除预警：${wnName(wnInSnap(snap, args[0]))}`
+    case 'linkEvent':
+      return `预警人工关联灾情事件：${wnName(wnInSnap(snap, args[0]))}`
+    case 'createEventForWarning':
+      return `预警建档为灾情事件：${wnName(wnInSnap(snap, args[0]))}`
+    case 'applySuggestion':
+      return `预警预置调度一键出库：${wnName(wnInSnap(snap, args[0]))}`
+    default: return ''
+  }
+}
+const WARNING_ROLES_LABEL = { duty: '值班调度员', commander: '现场指挥员', expert: '气象地灾专家', chief: '应急指挥长' }
 
 /* ---------- 当帧新增处置日志（事件时间线 / 阻断日志 / 工单日志） ---------- */
 
@@ -461,6 +522,25 @@ function diffSnapshots(prev, next) {
     }
   })
 
+  /* 实时预警 */
+  const WN_STATUS_LABEL = { pending: '待确认', confirmed: '已确认', revoked: '已解除' }
+  next.wn.warnings.forEach((w) => {
+    const old = prev ? warningInSnap(prev, w.id) : null
+    const meta = WARNING_KINDS[w.kind]
+    if (!old) {
+      statusChanges.push({ icon: '📡', color: CATEGORY_META.warning.color, text: `接入${meta?.label || '预警'}（${sevLabelOf(w.severity)}·${w.location?.name || ''}）` })
+    } else {
+      if (old.severity !== w.severity) {
+        statusChanges.push({ icon: old.severity ? '⏫' : '📡', color: CATEGORY_META.warning.color, text: `${meta?.label || '预警'}（${w.location?.name || ''}）等级：${sevLabelOf(old.severity)} → ${sevLabelOf(w.severity)}` })
+      }
+      if (old.status !== w.status) {
+        statusChanges.push({ icon: '🔁', color: CATEGORY_META.warning.color, text: `${meta?.label || '预警'}（${w.location?.name || ''}）：${WN_STATUS_LABEL[old.status] || old.status} → ${WN_STATUS_LABEL[w.status] || w.status}` })
+      } else if (Object.keys(w.acks || {}).length !== Object.keys(old.acks || {}).length) {
+        statusChanges.push({ icon: '✅', color: CATEGORY_META.warning.color, text: `${meta?.label || '预警'}（${w.location?.name || ''}）多角色确认：${Object.keys(old.acks).length} → ${Object.keys(w.acks).length} 个角色已签收` })
+      }
+    }
+  })
+
   /* 资源占用：各基地各类型库存增减 */
   next.cmd.bases.forEach((b) => {
     const old = prev ? baseInSnap(prev, b.id) : null
@@ -498,6 +578,7 @@ function diffSnapshots(prev, next) {
   counters.batches = next.tr.batches.length
   counters.blocks = next.rb.blocks.filter((b) => b.status === 'active').length
   counters.orders = next.ro.orders.length
+  counters.warnings = next.wn.warnings.filter((w) => w.status !== 'revoked').length
   counters.settleDay = next.tr.settleDay
 
   return { statusChanges, routes, stocks, occupancy, counters }
@@ -719,6 +800,7 @@ export function installReplayRecorder() {
   wrapStore(useTransferStore(), 'tr')
   wrapStore(useRoadblockStore(), 'rb')
   wrapStore(useRepairStore(), 'ro')
+  wrapStore(useWarningStore(), 'wn')
 }
 
 let playTimer = null
@@ -1056,17 +1138,20 @@ export const useReplayStore = defineStore('replay', {
     },
     closeCompare() { this.compare = null },
 
-    // 快照整体替换四 store 态势（地图/面板经响应式 watch 自动重绘）
+    // 快照整体替换五 store 态势（地图/面板经响应式 watch 自动重绘）
     _restore(snap) {
       const cmd = useCommandStore()
       const tr = useTransferStore()
       const rb = useRoadblockStore()
       const ro = useRepairStore()
+      const wn = useWarningStore()
       if (cmd.autoPlay) {
         cmd.autoPlay = false
         clearInterval(cmd.replayTimer)
         cmd.replayTimer = null
       }
+      // 回放只读期间停止实时信号推送（恢复 live 后可重新开启）
+      wn.stopFeed()
       // 直接赋值替换（reactive 数组/对象替换同样触发响应式更新；
       // 不走 $patch 是为了规避本模块对业务 store action 的包装链）
       cmd.events = clone(snap.cmd.events)
@@ -1093,6 +1178,13 @@ export const useReplayStore = defineStore('replay', {
       ro.assigningBlockId = null
       ro.focusOrderId = snap.ro.focusOrderId
       ro.clock = snap.ro.clock
+
+      // 旧快照可能无预警模块（向后兼容：还原为空态）
+      wn.warnings = clone(snap.wn?.warnings || [])
+      wn.signals = clone(snap.wn?.signals || [])
+      wn.feedCursor = snap.wn?.feedCursor || 0
+      wn.focusWarningId = snap.wn?.focusWarningId || null
+      wn.currentRole = snap.wn?.currentRole || wn.currentRole
     },
 
     /* ---------- 旧版单线历史兼容 ---------- */

@@ -62,6 +62,14 @@
         <span class="num" style="color:#ce93ff">{{ repair.verifyCount }}</span>
         <span class="lab">待验收</span>
       </div>
+      <div class="stat" :class="{ wn: warning.stats.pending }">
+        <span class="num" style="color:#26c6da">{{ warning.stats.active }}</span>
+        <span class="lab">在效预警</span>
+      </div>
+      <div class="stat" :class="{ blocked: warning.stats.pending }">
+        <span class="num" style="color:#ffcc80">{{ warning.stats.pending }}</span>
+        <span class="lab">预警待确认</span>
+      </div>
       <div class="stat">
         <span class="num" style="color:#4fc3f7">{{ transfer.stats.inTransit }}</span>
         <span class="lab">在途转移</span>
@@ -107,6 +115,7 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { useReplayStore } from '@/store/replay'
 import { SCENARIOS } from '@/mock/data'
 
@@ -114,6 +123,7 @@ const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const replay = useReplayStore()
 const scenarios = SCENARIOS
 const now = ref('')
@@ -178,6 +188,7 @@ onBeforeUnmount(() => clearInterval(timer))
 .stat .lab { font-size: 10px; color: #8ba2c8; }
 .stat.affected { border-color: rgba(255,112,67,0.5); background: rgba(60,24,14,0.4); }
 .stat.blocked { border-color: rgba(239,83,80,0.55); background: rgba(60,14,14,0.4); }
+.stat.wn { border-color: rgba(38,198,218,0.55); background: rgba(8,48,56,0.4); }
 
 .right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .clock {

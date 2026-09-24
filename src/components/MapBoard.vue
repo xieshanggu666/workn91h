@@ -21,6 +21,7 @@
       <div class="legend-item"><i class="dot" style="background:#26a69a"></i>安置点/转移路线</div>
       <div class="legend-item"><i class="dot" style="background:#c62828"></i>道路阻断区</div>
       <div class="legend-item"><i class="dot" style="background:#ff9800"></i>道路抢修中</div>
+      <div class="legend-item"><i class="dot" style="background:#26c6da"></i>实时预警落区</div>
     </div>
 
     <!-- 圈画提示 -->
@@ -41,6 +42,27 @@
         <span>👥 影响 {{ (selectedEvent.affected || 0).toLocaleString() }} 人</span>
       </div>
     </div>
+
+    <!-- 预警落区信息浮层 -->
+    <div v-if="focusWarning" class="warn-pop" :class="focusWarning.severity">
+      <div class="wp-head">
+        <span>{{ warnKindMeta(focusWarning.kind).icon }}</span>
+        <strong>{{ warnKindMeta(focusWarning.kind).label }}</strong>
+        <em class="wp-sev">{{ sevLabel(focusWarning.severity) }}</em>
+        <i class="wp-status">{{ warnStatusLabel(focusWarning.status) }}</i>
+      </div>
+      <p>{{ focusWarning.note || '监测指标超阈值' }}</p>
+      <div class="wp-meta">
+        <span>📡 {{ focusWarning.sourceName }}</span>
+        <span>📍 {{ focusWarning.location.name }}</span>
+        <span>📐 落区 {{ focusWarning.radiusKm }}km</span>
+      </div>
+      <div class="wp-acks">
+        <span v-for="r in warnRequiredRoles(focusWarning)" :key="r.id" :class="{ done: focusWarning.acks[r.id] }">
+          {{ r.icon }}{{ focusWarning.acks[r.id] ? '✓' : '' }}
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -50,13 +72,15 @@ import { useCommandStore } from '@/store/command'
 import { useTransferStore } from '@/store/transfer'
 import { useRoadblockStore } from '@/store/roadblock'
 import { useRepairStore } from '@/store/repair'
+import { useWarningStore } from '@/store/warning'
 import { loadAMap } from '@/config/amap'
-import { EVENT_TYPES, SEVERITY, RESOURCE_TYPES } from '@/mock/data'
+import { EVENT_TYPES, SEVERITY, RESOURCE_TYPES, WARNING_KINDS, ACK_ROLES_BY_SEV, WARNING_ROLES } from '@/mock/data'
 
 const store = useCommandStore()
 const transfer = useTransferStore()
 const roadblock = useRoadblockStore()
 const repair = useRepairStore()
+const warning = useWarningStore()
 const mapRef = ref(null)
 const loading = ref(true)
 const loadError = ref('')
@@ -66,12 +90,19 @@ let amap = null
 let heatmap = null
 let overlays = {
   poly: [], markers: [], lines: [], baseMarkers: [], shelterMarkers: [], transferLines: [],
-  blocks: [], blockMarkers: [], draft: []
+  blocks: [], blockMarkers: [], draft: [], warnPoly: [], warnMarkers: []
 }
 
 const selectedEvent = computed(() =>
   store.events.find((e) => e.id === store.selectedEventId) || null
 )
+
+// 实时预警落区浮层（点击地图预警标记或面板「地图定位」）
+const focusWarning = computed(() => warning.warningById(warning.focusWarningId))
+const warnKindMeta = (k) => WARNING_KINDS[k] || { label: k, icon: '🚡', color: '#26c6da' }
+const sevLabel = (v) => SEVERITY.find((s) => s.value === v)?.label || v
+const warnStatusLabel = (s) => ({ pending: '待确认', confirmed: '已确认', revoked: '已解除' }[s] || s)
+const warnRequiredRoles = (w) => (ACK_ROLES_BY_SEV[w.severity] || []).map((id) => WARNING_ROLES.find((r) => r.id === id))
 
 const typeLabel = (t) => EVENT_TYPES[t]?.label || t
 const eventColor = (t) => EVENT_TYPES[t]?.color || '#777'
@@ -313,9 +344,59 @@ function renderBlocks() {
   })
 }
 
+// 实时预警落区（青色虚线影响范围 + 等级标记；已解除不绘制）
+function warningMarkerContent(w) {
+  const meta = warnKindMeta(w.kind)
+  const sev = w.severity
+  const ackDone = Object.keys(w.acks || {}).length
+  const ackTotal = (ACK_ROLES_BY_SEV[sev] || []).length
+  return `
+    <div class="wn-marker ${sev} ${w.status}" title="${meta.label}（${sevLabel(sev)}）· ${ackDone}/${ackTotal} 角色确认">
+      <span class="wn-ico">${meta.icon}</span>
+      <em class="wn-badge">${w.status === 'confirmed' ? '✓' : ackDone + '/' + ackTotal}</em>
+      <i class="wn-ring"></i>
+    </div>`
+}
+
+function renderWarnings() {
+  overlays.warnPoly.forEach((o) => map?.remove(o))
+  overlays.warnMarkers.forEach((m) => map?.remove(m))
+  overlays.warnPoly = []
+  overlays.warnMarkers = []
+  if (!amap || !map) return
+  const colorOf = { red: '#ef5350', orange: '#ff9800', yellow: '#ffc107', blue: '#4caf50' }
+  warning.activeWarnings.forEach((w) => {
+    const color = colorOf[w.severity] || '#26c6da'
+    const poly = new amap.Polygon({
+      path: w.polygon,
+      fillColor: '#26c6da',
+      fillOpacity: w.status === 'confirmed' ? 0.1 : 0.16,
+      strokeColor: w.status === 'confirmed' ? '#4caf50' : color,
+      strokeWeight: 2,
+      strokeOpacity: 0.85,
+      strokeStyle: 'dashed',
+      bubble: true
+    })
+    poly.on('click', () => { warning.focusWarning(w.id) })
+    map.add(poly)
+    overlays.warnPoly.push(poly)
+    const marker = new amap.Marker({
+      position: [w.location.lng, w.location.lat],
+      content: warningMarkerContent(w),
+      anchor: 'center',
+      cursor: 'pointer'
+    })
+    marker.on('click', () => {
+      warning.focusWarning(w.id)
+      if (w.eventId) store.selectEvent(w.eventId)
+    })
+    map.add(marker)
+    overlays.warnMarkers.push(marker)
+  })
+}
+
 // 圈画中的草稿（顶点 + 闭合虚线预览）
-function renderDraft() {
-  overlays.draft.forEach((o) => map?.remove(o))
+function renderDraft() {  overlays.draft.forEach((o) => map?.remove(o))
   overlays.draft = []
   if (!amap || !map || !roadblock.draft.length) return
   const path = roadblock.draft.length > 2 ? [...roadblock.draft, roadblock.draft[0]] : roadblock.draft
@@ -384,6 +465,7 @@ onMounted(async () => {
     renderShelters()
     renderTransfers()
     renderBlocks()
+    renderWarnings()
     loading.value = false
     map.setFitView(null, false, [100, 80, 120, 80], 1)
   } catch (e) {
@@ -405,6 +487,8 @@ onBeforeUnmount(() => {
   overlays.blocks.forEach((p) => map?.remove(p))
   overlays.blockMarkers.forEach((m) => map?.remove(m))
   overlays.draft.forEach((o) => map?.remove(o))
+  overlays.warnPoly.forEach((o) => map?.remove(o))
+  overlays.warnMarkers.forEach((m) => map?.remove(m))
   map?.destroy()
 })
 
@@ -452,6 +536,20 @@ watch(
 )
 watch(() => roadblock.draft.length, () => renderDraft())
 watch(() => roadblock.drawing, (on) => bindDrawing(on))
+// 实时预警：落区增删、升级、确认进度、解除均触发重绘（历史回放恢复快照同样触发）
+watch(
+  () => warning.warnings
+    .map((w) => w.id + w.severity + w.status + w.radiusKm
+      + Object.keys(w.acks || {}).length
+      + (w.polygon || []).map((p) => p.join(',')).join(';'))
+    .join(','),
+  () => renderWarnings()
+)
+// 面板「地图定位」→ 聚焦预警落区
+watch(() => warning.focusWarningId, (id) => {
+  const w = warning.warningById(id)
+  if (w && map) map.setZoomAndCenter(10, [w.location.lng, w.location.lat])
+})
 // 选中阻断 → 地图聚焦该封闭区
 watch(() => roadblock.selectedBlockId, (id) => {
   const blk = roadblock.blocks.find((b) => b.id === id)
@@ -539,6 +637,43 @@ watch(() => roadblock.selectedBlockId, (id) => {
 .pop-sev { font-size: 12px; flex-shrink: 0; }
 .pop-desc { color: #aebadd; font-size: 12px; line-height: 1.6; margin: 8px 0; }
 .pop-meta { display: flex; gap: 12px; font-size: 12px; color: #8ea1c4; }
+
+/* 预警落区信息浮层 */
+.warn-pop {
+  position: absolute;
+  right: 14px; top: 14px;
+  width: 290px;
+  background: rgba(10, 32, 40, 0.93);
+  border: 1px solid rgba(38,198,218,0.35);
+  border-left: 3px solid #26c6da;
+  border-radius: 10px;
+  padding: 11px 13px;
+  z-index: 3;
+  color: #dbe4f3;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.warn-pop.red { border-left-color: #ef5350; }
+.warn-pop.orange { border-left-color: #ff9800; }
+.warn-pop.yellow { border-left-color: #ffc107; }
+.warn-pop.blue { border-left-color: #4caf50; }
+.wp-head { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.wp-head strong { color: #fff; flex: 1; }
+.wp-sev { font-style: normal; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 4px; color: #fff; }
+.warn-pop.red .wp-sev { background: #ef5350; }
+.warn-pop.orange .wp-sev { background: #ff9800; }
+.warn-pop.yellow .wp-sev { background: #c9a400; }
+.warn-pop.blue .wp-sev { background: #4caf50; }
+.wp-status { font-style: normal; font-size: 10px; color: #6fd6e8; }
+.warn-pop p { margin: 7px 0; font-size: 12px; color: #bfeaf0; line-height: 1.6; }
+.wp-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: #8fb8c8; }
+.wp-acks { display: flex; gap: 6px; margin-top: 8px; }
+.wp-acks span {
+  font-size: 12px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(120,160,220,0.12); border: 1px solid rgba(120,160,220,0.25); color: #5b6f94;
+}
+.wp-acks span.done { background: rgba(38,166,154,0.2); border-color: #26a69a; color: #7ef0c9; }
 
 /* 圈画提示 */
 .draw-tip {
@@ -637,5 +772,39 @@ watch(() => roadblock.selectedBlockId, (id) => {
   width: 10px; height: 10px; border-radius: 50%;
   background: #ef5350; border: 2px solid #fff;
   box-shadow: 0 1px 5px rgba(0,0,0,0.5);
+}
+/* 实时预警标记 */
+.wn-marker {
+  position: relative;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(10,32,40,0.92);
+  border: 2.5px solid #26c6da;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.wn-marker .wn-ico { font-size: 15px; }
+.wn-marker .wn-badge {
+  position: absolute; bottom: -6px; right: -8px;
+  font-style: normal; font-size: 8px; font-weight: 700; line-height: 13px;
+  min-width: 15px; text-align: center; padding: 0 3px;
+  border-radius: 7px; border: 1.5px solid #fff;
+  background: #ff9800; color: #fff; white-space: nowrap;
+}
+.wn-marker.confirmed .wn-badge { background: #4caf50; }
+.wn-marker.red { border-color: #ef5350; box-shadow: 0 0 10px rgba(239,83,80,0.6); }
+.wn-marker.orange { border-color: #ff9800; box-shadow: 0 0 10px rgba(255,152,0,0.55); }
+.wn-marker.yellow { border-color: #ffc107; }
+.wn-marker.blue { border-color: #4caf50; }
+.wn-marker .wn-ring {
+  position: absolute; inset: -3px; border-radius: 50%;
+  border: 2px solid #26c6da; opacity: 0;
+  animation: wnPulse 2s ease-out infinite;
+}
+.wn-marker.red .wn-ring { border-color: #ef5350; }
+.wn-marker.orange .wn-ring { border-color: #ff9800; }
+.wn-marker.confirmed .wn-ring { display: none; }
+@keyframes wnPulse {
+  0% { transform: scale(0.75); opacity: 0.7; }
+  100% { transform: scale(1.55); opacity: 0; }
 }
 </style>
